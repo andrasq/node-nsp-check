@@ -1,0 +1,19 @@
+{
+  "name": "nsp-check",
+  "version": "0.0.0",
+  "description": "`nsp check` work-alike",
+  "keywords": [],
+  "author": "andrasq",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git://github.com/andrasq/node-nsp-check" },
+
+  "dependencies": {
+    "qgetopt": "1.0.2",
+"qrpc": "1.1",
+    "qhttp": "0.6.0",
+    "semver": "5.6.0"
+  },
+
+  "scripts": {
+  }
+}
