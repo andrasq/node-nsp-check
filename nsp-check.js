@@ -34,36 +34,80 @@ var whichDeps = {
 };
 var jsonfile = opts.p || opts.package || './package';
 
+if (Array.isArray(jsonfile)) jsonfile = jsonfile[0];
+if (jsonfile[0] !== '/') jsonfile = process.cwd() + '/' + jsonfile;
 
-var deps = getDepsOfJson(require(jsonfile), whichDeps, function(err, ret) {
+var deps = getDepsOfJson(require(jsonfile), whichDeps, function(err, depsTree) {
     if (err) throw err;
-    qhttp.post('https://registry.npmjs.org/-/npm/v1/security/audits', ret, function(err, res, body) {
-// TODO: option to display advisory message
-// TODO: option to 
+    qhttp.post('https://registry.npmjs.org/-/npm/v1/security/audits', depsTree, function(err, res, body) {
+        if (err) throw err;
+        if (res.statusCode >= 400) throw new Error('http error getting audit: ' + res.statusCode);
+
         var report = tryJsonDecode(body);
         if (report instanceof Error) throw new Error('unable to decode audit: ' + body);
-        console.log("AR: Done. audit=", util.inspect(report, { depth: 6 }));
         var alerts = Object.keys(report.advisories);
-        console.log("found %d vulnerabilities", alerts.length);
+//console.log("AR: Done. audit=", util.inspect(report, { depth: 6 }));
+
+        // genreate the report
+        qprintf.printf("found %d vulnerabilities\n", alerts.length);
         var rows = [];
+        rows.push('--');
         for (var id in report.advisories) {
             var alert = report.advisories[id];
-            rows.push([ alert.severity + ' ' + alert.metadata.exploitability, alert.title ]);
-            rows.push([ 'Package', alert.findings.map(function(found){ return alert.module_name + '@' + found.version }).join(', ') ]);
-            rows.push([ 'Occurs', 'affected: ' + alert.vulnerable_versions + ' patched: ' + alert.patched_versions ]);
+            rows.push([ toCapital(alert.severity) + ' ' + alert.metadata.exploitability, alert.title ]);
+            for (var i=0; i<alert.findings.length; i++) {
+            rows.push([ 'Package', alert.findings[i].paths.map(function(path){ return buildModulePath(depsTree, path.split('>')) }).join(' ') ]);
+            }
+            rows.push([ 'Occurs', alert.vulnerable_versions + ' (patched: ' + alert.patched_versions + ')' ]);
             // TODO: any reason to show all paths?
             // TODO: annotate the path with version numbers
-            rows.push([ 'Path', alert.findings[0].paths[0].split('>').join(' > ') ]);
             rows.push([ 'Info', alert.url + ' ' + alert.cves.join(',') + ' ' + alert.cwe ]);
-//            qprintf.printf("+------------+----------------\n");
-//            qprintf.printf("| %10s | %s |\n", alert.severity, alert.title);
-//            qprintf.printf("+------------+----------------\n");
-//            console.log("item:", id, alert.id, alert.created, alert.module_name, alert.cves, alert.title, alert.severity, alert.vulnerable_versions, alert.patched_versions, alert.cwe, alert.url);
+            rows.push('--');
+            // TODO: option to display more alert details (eg advisory messages, recommendations)
         }
-console.log(rows);
+
+        // format the report
+        var colwid0 = 0, colwid1 = 0;
+        for (var i=0; i<rows.length; i++) {
+            if (rows[i] === '--') continue;
+            rows[i][0] = String(rows[i][0]);
+            rows[i][1] = String(rows[i][1]);
+            if (rows[i][0].length > colwid0) colwid0 = rows[i][0].length;
+            if (rows[i][1].length > colwid1) colwid1 = rows[i][1].length;
+        }
+
+        // print the report
+        var dashes = str_repeat('-', colwid0 + colwid1 + 1);
+        if (rows.length > 1) for (var i=0; i<rows.length; i++) {
+            if (rows[i] === '--') {
+                qprintf.printf("+-%.*s--+--%.*s-+\n", colwid0, dashes, colwid1, dashes);
+            } else {
+                qprintf.printf("| %-*s  |  %-*s |\n", colwid0, rows[i][0], colwid1, rows[i][1]);
+            }
+        }
+
+        // let the process exitcode reflect vulnerability status: 0 = ok, 1 = vulnerable
+        process.exit(rows.length > 1 ? 1 : 0);
     })
 })
 
+function toCapital( str ) {
+    return str[0].toUpperCase() + str.slice(1);
+}
+
+function str_repeat( str, n ) {
+    return str.repeat ? str.repeat(n) : new Array(n + 1).join(str);
+}
+
+function buildModulePath( depsTree, pathComponents ) {
+    var names = [];
+    while (pathComponents.length && depsTree) {
+        var name = pathComponents.shift();
+        names.push(name + '@' + depsTree.requires[name]);
+        depsTree = depsTree.dependencies[name];
+    }
+    return names.reverse().join('  < ');
+}
 
 /**
  * given a package json pjson, return its dependencies
@@ -142,7 +186,7 @@ function getPJson( name, version, userCallback ) {
             callback(null, body);
         })
     }
-    else if (/[a-zA-Z#:/]/.test(version)) {
+    else if (/[://#]/.test(version)) {
         // FIXME: version could be a url or git tag, handle those too
         throw new Error(version + ': url path versions not handled yet');
     }

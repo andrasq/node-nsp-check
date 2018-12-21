@@ -1,6 +1,6 @@
 {
   "name": "nsp-check",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "`nsp check` work-alike",
   "keywords": [],
   "author": "andrasq",
@@ -9,8 +9,8 @@
 
   "dependencies": {
     "qgetopt": "1.0.2",
-"qrpc": "1.1",
     "qhttp": "0.6.0",
+    "qprintf": "0.13.2",
     "semver": "5.6.0"
   },
 
