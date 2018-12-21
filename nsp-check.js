@@ -13,6 +13,7 @@ var fs = require('fs');
 var util = require('util');
 var https = require('http');
 var qgetopt = require('qgetopt');
+var qprintf = require('qprintf');
 var semver = require('semver');
 var qhttp = require('qhttp').defaults({
     xagent: new https.Agent({
@@ -26,6 +27,7 @@ var opts = qgetopt.getopt(process.argv, "p:(-package):");
 var whichDeps = {
     dependencies: true,
     optionalDependencies: true,
+    bundledDependencies: true,
     devDependencies: false,
     optionalDevDependencies: false,
     peerDependencies: false,
@@ -34,7 +36,32 @@ var jsonfile = opts.p || opts.package || './package';
 
 
 var deps = getDepsOfJson(require(jsonfile), whichDeps, function(err, ret) {
-    console.log("AR: Done. deps=", util.inspect(ret, { depth: 6 }));
+    if (err) throw err;
+    qhttp.post('https://registry.npmjs.org/-/npm/v1/security/audits', ret, function(err, res, body) {
+// TODO: option to display advisory message
+// TODO: option to 
+        var report = tryJsonDecode(body);
+        if (report instanceof Error) throw new Error('unable to decode audit: ' + body);
+        console.log("AR: Done. audit=", util.inspect(report, { depth: 6 }));
+        var alerts = Object.keys(report.advisories);
+        console.log("found %d vulnerabilities", alerts.length);
+        var rows = [];
+        for (var id in report.advisories) {
+            var alert = report.advisories[id];
+            rows.push([ alert.severity + ' ' + alert.metadata.exploitability, alert.title ]);
+            rows.push([ 'Package', alert.findings.map(function(found){ return alert.module_name + '@' + found.version }).join(', ') ]);
+            rows.push([ 'Occurs', 'affected: ' + alert.vulnerable_versions + ' patched: ' + alert.patched_versions ]);
+            // TODO: any reason to show all paths?
+            // TODO: annotate the path with version numbers
+            rows.push([ 'Path', alert.findings[0].paths[0].split('>').join(' > ') ]);
+            rows.push([ 'Info', alert.url + ' ' + alert.cves.join(',') + ' ' + alert.cwe ]);
+//            qprintf.printf("+------------+----------------\n");
+//            qprintf.printf("| %10s | %s |\n", alert.severity, alert.title);
+//            qprintf.printf("+------------+----------------\n");
+//            console.log("item:", id, alert.id, alert.created, alert.module_name, alert.cves, alert.title, alert.severity, alert.vulnerable_versions, alert.patched_versions, alert.cwe, alert.url);
+        }
+console.log(rows);
+    })
 })
 
 
@@ -45,7 +72,6 @@ var deps = getDepsOfJson(require(jsonfile), whichDeps, function(err, ret) {
  * dependencies is a recursive name:getDepsOfJson() mapping of the sub-dependencies.
  */
 function getDepsOfJson( pjson, whichDeps, callback ) {
-console.log("AR: getDepsOfJson of", pjson.name);
     var name = pjson.name || 'main';
     var version = pjson.version || '0.0.1';
 
@@ -68,23 +94,18 @@ console.log("AR: getDepsOfJson of", pjson.name);
     for (var k in deps.dependencies) {
         deps.requires[k] = deps.dependencies[k];
     }
-console.log("AR: ---- pjson reqs", name, deps.requires);
 
     // for each dependency, replace dependencies with the sub-deps object
     forEach(
         Object.keys(deps.requires),
         function(name, cb) {
             var version = deps.requires[name];
-console.log("AR: subdep", name, version);
 
             getPJson(name, version, function(err, json) {
                 if (err) return cb(err);
                 if (!json) return cb(new Error('did not get a pjson object'));
 
-console.log("AR: getting subdeps of dep %s@%s", json.name, json.version);
                 getDepsOfJson(json, whichDeps, function(err, subDeps) {
-console.log("AR: BACK");
-console.log("AR: got subdeps pjson for", err, json.name, subDeps.name, subDeps.version, subDeps.requires);
                     // assert subDeps.version == deps.requires[name]
                     deps.dependencies[name] = subDeps;
                     cb();
@@ -92,7 +113,6 @@ console.log("AR: got subdeps pjson for", err, json.name, subDeps.name, subDeps.v
             })
         },
         function(err) {
-console.log("AR: all done getting subdeps of", pjson.name);
             callback(err, deps);
         }
     );
@@ -104,15 +124,12 @@ console.log("AR: all done getting subdeps of", pjson.name);
 function getPJson( name, version, userCallback ) {
     // TODO: cache already seen info
     // TODO: persistent-cache already seen info, eg in ~/.npm/<package>/<version>
-console.log("AR: mark: getPJson", name, version);
 
     function callback(err, ret) {
-console.log("AR: getPJson returning", name);
         userCallback(err, ret);
     }
 
     if (semverNumberRegex.test(version)) {
-console.log("AR: version is semver");
         var pjson = getCachedPJson(name, version);
         // TODO: option to bypass the cache, re-fetch everything
         if (pjson) { setImmediate(callback, null, pjson); return }
@@ -121,18 +138,15 @@ console.log("AR: version is semver");
             // nb: "GET is not allowed" MethodNotAllowedError means "not found" (eg '*' or '1.0')
             if (err) return callback(err);
             body = tryJsonDecode(String(body));
-            if (body instanceof Error) return callback(new Error('unable to decode response: ' + body));
+            if (body instanceof Error) return callback(new Error('unable to decode package.json: ' + body));
             callback(null, body);
         })
     }
     else if (/[a-zA-Z#:/]/.test(version)) {
-console.log("AR: version is text");
         // FIXME: version could be a url or git tag, handle those too
         throw new Error(version + ': url path versions not handled yet');
     }
     else {
-console.log("AR: version is other", version);
-
 // TODO: only retrieve the versions, not everything
 // TODO: ? warn about under-constrained dependency
 // FIXME: handle '*' and '>= 1.2' etc
@@ -141,7 +155,6 @@ console.log("AR: version is other", version);
             body = tryJsonDecode(String(body));
             if (body instanceof Error) return callback(new Error('unable to decode response: ' + body));
             var bestVersion = selectBestVersion(Object.keys(body.versions), version);
-console.log("AR: other version using",  bestVersion);
             getPJson(name, bestVersion, callback);
         })
     }
@@ -206,7 +219,6 @@ function forEach( items, func, callback ) {
     function processItem( item ) {
         func(item, function(err) {
             ndone += 1;
-console.log("AR: forEach %d done of %d", ndone, nexpect);
             if (err && !returnError) returnError = err;
             if (ndone === nexpect) {
                 callback(returnError);
