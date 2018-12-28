@@ -28,6 +28,7 @@ var qhttp = require('qhttp').defaults({
     }),
 });
 
+// TODO: move options handling into bin/nsp-check
 var opts = qgetopt.getopt(process.argv, "V(-version)h(-help)p:(-package):");
 
 if (opts.V || opts.version) return console.log(require(__dirname + '/package.json').version);
@@ -45,6 +46,8 @@ var jsonfile = opts.p || opts.package || './package';
 
 if (Array.isArray(jsonfile)) jsonfile = jsonfile[0];
 if (jsonfile[0] !== '/') jsonfile = process.cwd() + '/' + jsonfile;
+
+// TODO: refactor into a class NspCheck, and call the check(package, options, cb) on a singleton
 
 var deps = getDepsOfJson(require(jsonfile), whichDeps, function(err, depsTree) {
     if (err) throw err;
