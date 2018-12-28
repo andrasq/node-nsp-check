@@ -49,6 +49,7 @@ if (jsonfile[0] !== '/') jsonfile = process.cwd() + '/' + jsonfile;
 
 // TODO: refactor into a class NspCheck, and call the check(package, options, cb) on a singleton
 
+// TODO: allow jsonfile to be a package path or a package name
 var deps = getDepsOfJson(require(jsonfile), whichDeps, function(err, depsTree) {
     if (err) throw err;
     qhttp.post('https://registry.npmjs.org/-/npm/v1/security/audits', depsTree, function(err, res, body) {
