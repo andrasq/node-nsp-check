@@ -1,12 +1,13 @@
 # nsp-check
 
-`nsp check` work-alike, may it rest in peace.  It did it right.
+`nsp check` work-alike.  Nsp did it right, may it rest in peace.
 
     npm install --global nsp-check
-    nsp-check [-p path/to/package.json]
+    nsp-check [-p path/to/package]
 
 ## Change Log
 
+- 0.2.0 - support npm and https://github, no private repos yet
 - 0.1.0 - rough alpha version
 
 ## Todo
