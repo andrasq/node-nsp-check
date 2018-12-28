@@ -11,7 +11,9 @@ var semverNumberRegex = /^(\d+)\.(\d+)\.(\d+)$/;
 
 var fs = require('fs');
 var util = require('util');
+var Url = require('url');
 var https = require('http');
+
 var qgetopt = require('qgetopt');
 var qprintf = require('qprintf');
 var semver = require('semver');
@@ -187,11 +189,34 @@ function getPJson( name, version, userCallback ) {
         })
     }
     else if (/[://#]/.test(version)) {
-        // FIXME: version could be a url or git tag, handle those too
-        throw new Error(version + ': url path versions not handled yet');
+// https://www.quora.com/How-can-I-pull-one-file-from-a-Git-repository-instead-of-the-entire-project
+// git archive --format=tar --remote=ssh://{user}@{host}[:port]{/path/to/repo/on/filesystem} {tree-ish} -- {path to file in repo} |tar xf -
+// or, for public repos (private repos return "404 Not Found"):
+// curl https://raw.githubusercontent.com/andrasq/node-nsp-check/{{commit-ish, eg "master" or "0.13.2"}}/package.json
+// TODO: parse url into host, user, repo, version, then reassemble:
+        var repo = parseUserRepoVersion(version);
+        if (!repo) throw new Error('unable to parse package path: ' + version);
+
+        if (/^http/.test(repo.type)) {
+            fetchRepoRawFile(repo, 'package.json', returnParsedPJson);
+        }
+        else if (/^git/.test(repo.type)) {
+            fetchRepoGitFile(repo, 'package.json', returnParsedPJson);
+        }
+        else throw new Error(repo.type + ': repo type not handled yet');
+
+        function returnParsedPJson( err, body ) {
+            if (err) return callback(err);
+
+            body = tryJsonDecode(String(body));
+            if (body instanceof Error) return callback(new Error('unable to decode package.json: ' + body.message));
+
+            callback(null, body);
+        }
     }
     else {
-// TODO: only retrieve the versions, not everything
+// note: if the package version is not in npm, cannot query available versions
+// TODO: only retrieve the package.json, not everything
 // TODO: ? warn about under-constrained dependency
 // FIXME: handle '*' and '>= 1.2' etc
         qhttp.get('https://registry.npmjs.org/' + urlencode(name), function(err, res, body) {
@@ -202,6 +227,79 @@ function getPJson( name, version, userCallback ) {
             getPJson(name, bestVersion, callback);
         })
     }
+}
+
+function parseUserRepoVersion( str ) {
+    var parts = Url.parse(str);
+    if (!parts.slashes || !parts.path) return null;
+
+// FIXME: retain parts.auth for http protocols (to be used for http basic auth)
+
+    var nameSep = parts.path.indexOf('/', 1);
+    if (!nameSep) return null;
+
+    // Url.parse:
+    //   git://git@github.com:andrasq/node-nsp-check#0.1.0 => { git: | github.com | /:andrasq/node-nsp-check | #0.1.0 }
+    //   git+ssh://git@github.com:andrasq/node-nsp-check   => { git+ssh: | github.com | /:andrasq/node-nsp-check | null }
+    //   https://github.com/andrasq/node-nsp-check#0.1.0   => { https: | github.com | /andrasq/node-nsp-check | #0.1.0 }
+
+    var host = parts.host.toLowerCase();                // host, including port if any
+    var version = parts.hash;                           // version if any, including leading #
+    if (version[0] === '#') version = version.slice(1);
+    if (!version) version = 'master';
+
+    var repoOwner = parts.path.slice(1, nameSep);       // repo owner without leading /, but including a leading :
+    if (repoOwner[0] === ':') repoOwner = repoOwner.slice(1);
+
+    var repoName = parts.path.slice(nameSep + 1);       // repo name, without leading /
+    if (repoName.slice(-1) === '/') repoName = repoName.slice(0, -1);
+    if (repoName.slice(-4) === '.git') repoName = repoName.slice(0, -4);
+
+    if (!host || !repoOwner || !repoName) return null;
+
+    var type = /http/.test(parts.protocol) ? 'http' : /git/.test(parts.protocol) ? 'git' : null;
+    if (/ssh/.test(parts.protocol)) type += '+ssh';
+
+    var ret = {
+        // TODO: maybe expose not type but { proto: proto.toLowerCase() }
+        type: type, host: host, user: repoOwner, repo: repoName, version: version,
+        input: str,
+    };
+    return ret;
+}
+
+function fetchRepoRawFile( repo, filename, callback ) {
+    if (repo.host === 'github.com' || repo.host === 'github.com:80') {
+        var url = qprintf.sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", repo.user, repo.repo, repo.version, filename);
+        qhttp.get(url, returnCb);
+        // TODO: if not found, try with github credentials
+    }
+    // TODO: gitlab.com etc other git-like repos
+    // TODO: repos with other path syntaxes
+    else {
+        var url = qprintf.sprintf("https://%s/%s/%s/%s/%s", repo.host, repo.user, repo.repo, repo.version, filename);
+        qhttp.get(url, returnCb);
+    }
+
+    function returnCb( err, res, body ) {
+        if (err || res.statusCode >= 300) return callback(err || new Error('error fetching file: http ' + res.statusCode));
+        callback(null, String(body));
+    }
+}
+
+// fetch file with git protocol
+function fetchRepoGitFile( repo, filename, callback ) {
+    // FIXME: use git credentials to be able to access private repos too
+    if (repo.host === 'github.com' || repo.host === 'github.com:80') {
+        var url = qprintf.sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", repo.user, repo.repo, repo.version, filename);
+    } else {
+        // TODO: handle repos with other path syntaxes
+        var url = qprintf.sprintf("https://%s/%s/%s/%s/%s", repo.host, repo.user, repo.repo, repo.version, filename);
+    }
+    qhttp.get(url, function(err, res, body) {
+        if (err || res.statusCode >= 400) return callback(err || new Error('unable to fetch file: http ' + res.statusCode));
+        callback(null, String(body));
+    })
 }
 
 function getCachedPJson( name, version ) {
