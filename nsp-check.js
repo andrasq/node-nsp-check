@@ -28,7 +28,11 @@ var qhttp = require('qhttp').defaults({
     }),
 });
 
-var opts = qgetopt.getopt(process.argv, "p:(-package):");
+var opts = qgetopt.getopt(process.argv, "V(-version)h(-help)p:(-package):");
+
+if (opts.V || opts.version) return console.log(require(__dirname + '/package.json').version);
+if (opts.h || opts.help) return console.log("nsp-check [-p package]");
+
 var whichDeps = {
     dependencies: true,
     optionalDependencies: true,
